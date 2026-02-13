@@ -46,61 +46,98 @@
   </div>
 
   <script>
-    // Resize image map coordinates
-    setTimeout(function () {
-      function mapResizer(maps) {
-        if (!maps) maps = document.getElementsByTagName('map');
+  (function () {
+    // --- Image map resizer (fast + bfcache-safe) ---
+    function mapResizer(maps) {
+      if (!maps) maps = document.getElementsByTagName('map');
 
+      // Cache original coordinates once (in natural image coordinate space)
+      for (const map of maps) {
+        map.img = document.querySelector(`[usemap="#${map.name}"]`);
+        map.areas = map.getElementsByTagName('area');
+
+        for (const area of map.areas) {
+          let arr = (area.coords || "")
+            .split(',')
+            .map(n => parseInt(n, 10))
+            .filter(n => !Number.isNaN(n));
+
+          // Normalize rect coords so left/top always come first
+          if (area.shape && area.shape.toLowerCase() === 'rect' && arr.length === 4) {
+            const left = Math.min(arr[0], arr[2]);
+            const top = Math.min(arr[1], arr[3]);
+            const right = Math.max(arr[0], arr[2]);
+            const bottom = Math.max(arr[1], arr[3]);
+            arr = [left, top, right, bottom];
+          }
+
+          area._coordArr = arr; // store original coords
+        }
+      }
+
+      function resizeMaps() {
         for (const map of maps) {
-          map.img = document.querySelector(`[usemap="#${map.name}"]`);
-          map.areas = map.getElementsByTagName('area');
+          if (!map.img || !map.img.naturalWidth) continue;
+
+          const scale = map.img.offsetWidth / map.img.naturalWidth;
+
           for (const area of map.areas) {
-            area.coordArr = area.coords.split(',').map(coord => parseInt(coord));
+            if (!area._coordArr || area._coordArr.length === 0) continue;
+            area.coords = area._coordArr.map(c => Math.round(c * scale)).join(',');
           }
         }
-
-        function resizeMaps() {
-          for (const map of maps) {
-            if (!map.img || !map.img.naturalWidth) continue;
-            const scale = map.img.offsetWidth / map.img.naturalWidth;
-            for (const area of map.areas) {
-              area.coords = area.coordArr.map(coord => Math.round(coord * scale)).join(',');
-            }
-          }
-        }
-
-        function initMapResizer() {
-          for (const map of maps) {
-            if (map.img.complete) {
-              resizeMaps();
-            } else {
-              map.img.onload = resizeMaps;
-            }
-          }
-        }
-
-        window.addEventListener('resize', resizeMaps);
-        window.addEventListener('load', initMapResizer);
-        initMapResizer();
       }
 
-      if (document.readyState === 'complete') {
-        mapResizer();
-      } else {
-        window.addEventListener('load', mapResizer);
+      // Run twice to catch iframe/layout settling
+      function runResizeTwice() {
+        resizeMaps();
+        setTimeout(resizeMaps, 250);
       }
-    }, 2000);
 
-    // Force link to open in same tab, breaking out of iframe
-    document.addEventListener('DOMContentLoaded', () => {
-      const areas = document.querySelectorAll('area');
-      areas.forEach(area => {
+      // If image isn't ready yet, wait for it
+      for (const map of maps) {
+        if (map.img && !map.img.complete) {
+          map.img.addEventListener('load', runResizeTwice, { once: true });
+        }
+      }
+
+      window.addEventListener('resize', resizeMaps);
+      window.addEventListener('load', runResizeTwice);
+
+      // Key for Back button (bfcache restore)
+      window.addEventListener('pageshow', runResizeTwice);
+
+      // Run now (after a short delay so SharePoint iframe can size)
+      setTimeout(runResizeTwice, 150);
+    }
+
+    // --- Break out of iframe on click (bfcache-safe) ---
+    function bindAreaLinks() {
+      document.querySelectorAll('area[href]').forEach(area => {
+        if (area.dataset.bound === "1") return; // prevent double-binding
+        area.dataset.bound = "1";
+
         area.addEventListener('click', (e) => {
           e.preventDefault();
           window.top.location.href = area.href;
-        });
+        }, true);
       });
-    });
-  </script>
+    }
+
+    // Init
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        mapResizer();
+        bindAreaLinks();
+      });
+    } else {
+      mapResizer();
+      bindAreaLinks();
+    }
+
+    // Ensure links still work after Back/Forward restore
+    window.addEventListener('pageshow', bindAreaLinks);
+  })();
+</script>
 </body>
 </html>
